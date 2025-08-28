@@ -1,0 +1,117 @@
+
+MCP (Model Context Protocol)
+
+	Models are only as good as the context provided to them. MCP is an open protocol that standardizes how your LLM applications connect to and work with your tools & data sources.
+
+	Whatever can be done with MCP, can be done without MCP as well. 
+
+	Example: (without MCP)
+
+		AI App 1 -> Custom Implementation -> Custom prompt logic -> Custom tool calls -> Custom data access
+
+		AI App 2 -> Custom Implementation -> Custom prompt logic -> Custom tool calls -> Custom data access
+
+		// .. etc
+
+	(with MCP)
+
+		MCP Compatible LLM app -> Data Store MCP Server -> Databases / SQL, etc
+
+		MCP Compatible LLM app -> CRM MCP Server -> CRM systems
+
+		MCP Compatible LLM app -> Version Control MCP Server -> Version Control software
+
+	Note: With MCP, not only is the AI app development strealimed because you will be able to talk to multiple systems, but even the MCP server themselves can be exposed to multiple different AI agents!
+
+MCP Architecture
+
+	MCP client and MCP server maintain 1:1 relationship, and communicate through messages defined in MCP protocol.
+
+	A single host can contain multiple MCP clients which connect to disparate remote MCP servers.
+
+	MCP Client responsibilities
+	
+		- Invokes tool (similar to tool calling for LLM's)
+		- Queries for resources
+
+			These can be files, DB records, or API responses (i.e. traditional API requests)
+
+		- Interpolates prompts
+
+			Instead of burdening users with complex prompt engineering techniques bespoke to different systems (like google-drive, a PDF, etc), the server maintains and exposes prompt templates which the client can fill in. The client in turn requests the data to fill-in by the user, but the overhead of management is delegated to MCP
+
+	MCP Server responsibilities
+
+		- Exposes tools
+		- Exposes resources
+		- Exposes prompt templates
+
+MCP Python SDK
+
+	Defining tools
+
+		@mcp.tool()
+		def add(a: int, b: int) -> int:
+		"""
+			// description of arguments
+		"""
+		// business logic
+		return a + b
+
+	Defining resources (just like defining GET and POST requests on a server)
+
+		@mcp.resource(
+			"docs://documents", // you can templatize it as well
+			mime_type="application/json"
+		)
+		def list_docs()
+			// business logic
+
+	Defining prompts
+
+		@mcp.prompt(
+			name="format",
+			description="Rewrites the contents of a document in markdown format"
+		)
+		def format_document(
+			doc_id: str
+		) -> list[base.Message]:
+			// business logic, i.e., the highly complicated prompt
+
+		Note: If we were to leave the prompt engineering to the user, they may instantly write:
+
+			"Convert report.pdf to mardown"
+
+		However, if they had access to prompt templates, as we defined above, then the user just has to supply arguments to the prompt template and the LLM gets sufficient information to accomplish the task
+
+Transport between MCP client & server
+
+	If both clients and server are running locally then use "stdio", i.e., the client launches the server as a subprocess! When we are using the SDK, everything happens behind the scenes.
+
+	Else, use:
+
+		- HTTP + SSE (Server Sent Events)
+
+			This is a stateful connection.
+
+		- Streamable HTTP [MOST RECOMMENDED]
+
+			Can be stateful/stateless.
+
+Upcoming features of MCP
+
+	- Authentication
+
+		Sometimes server needs to access information which requires authn/authz
+
+	- Roots
+
+		Client can specify the server the roots where it needs to look for resources
+
+	- Sampling
+
+		Server requests inference from the LLM (instead of client requesting it). 
+
+	- Registry API
+	
+		Unified way to discover MCP servers. Allows for trust, similar to DNS.
