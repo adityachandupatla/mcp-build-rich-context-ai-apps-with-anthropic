@@ -46,7 +46,31 @@ MCP Architecture
 		- Exposes resources
 		- Exposes prompt templates
 
-MCP Python SDK
+┌─────────────────────────────────────────────────────┐
+│                   Host Application                   │
+│  (Claude Desktop, IDE plugin, your custom app)      │
+│                                                     │
+│  ┌─────────────┐    ┌─────────────────────────┐    │
+│  │     LLM     │◄──►│      MCP Client         │    │
+│  │  (Claude)   │    │  - discovers servers    │    │
+│  └─────────────┘    │  - lists tools/resources│    │
+│                     │  - invokes on behalf    │    │
+│                     │    of the LLM           │    │
+│                     └──────────┬──────────────┘    │
+└────────────────────────────────┼────────────────────┘
+                                 │ (stdio, SSE, etc.)
+           ┌─────────────────────┼─────────────────────┐
+           │                     │                     │
+           ▼                     ▼                     ▼
+    ┌─────────────┐       ┌─────────────┐       ┌─────────────┐
+    │ MCP Server  │       │ MCP Server  │       │ MCP Server  │
+    │  (GitHub)   │       │  (Postgres) │       │ (Your App)  │
+    │             │       │             │       │             │
+    │ @mcp.tool() │       │ @mcp.tool() │       │ @mcp.tool() │
+    │ @mcp.resource()     │ @mcp.resource()     │ @mcp.resource()
+    └─────────────┘       └─────────────┘       └─────────────┘
+
+MCP Python SDK for writing MCP server:
 
 	Defining tools
 
