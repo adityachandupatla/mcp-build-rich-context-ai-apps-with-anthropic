@@ -139,3 +139,184 @@ Upcoming features of MCP
 	- Registry API
 	
 		Unified way to discover MCP servers. Allows for trust, similar to DNS.
+
+MCP server for production-incident-evidence:
+
+	| Primitive  | Example 														| Purpose 								   |
+	|------------|--------------------------------------------------------------|------------------------------------------|
+	| Tool 	     | `search_incidents(query, service, version, limit)`           | Execute a search 						   |
+	| Tool       | `get_deployment_diff(deployment_id)`                         | Retrieve a focused deployment comparison |
+	| Resource   | `runbook://payments/idempotency` 							| Read identifiable context 			   |
+	| Prompt     | `investigate_payment_failure(error_code, service)`           | Obtain a reusable investigation template |
+
+	Tools are executable operations, resources expose readable context, and prompts supply templates. A resource is not simply another spelling of a REST GET endpoint; its URI and metadata form a context interface.
+
+	A resource supplies evidence. A prompt supplies instructions for working with evidence. Neither automatically invokes an LLM.
+
+	Workflow
+
+		User request
+			↓
+		Host exposes relevant tool schemas to the model
+			↓
+		Model proposes search_incidents(...)
+			↓
+		Host validates and authorizes the operation
+			↓
+		MCP client sends tools/call
+			↓
+		MCP server queries search backend
+			↓
+		Structured evidence returns to the host
+			↓
+		Host supplies evidence to the model
+
+	An illustrative result should be compact and useful:
+
+		{
+			"matches": [
+				{
+				"incident_id": "inc_1842",
+				"summary": "Retry reused an idempotency key with a modified payload.",
+				"service_version": "3.8",
+				"evidence_uri": "incident://inc_1842"
+				}
+			],
+			"next_cursor": null
+		}
+
+	Note: Current MCP list/read responses include caching metadata; avoid assuming every tool result is cacheable or safe to share across users.
+
+	Example of resources in MCP
+
+		Simple Example (static resource)
+		
+			@mcp.resource(
+				"runbook://payments/idempotency",
+				mime_type="text/markdown",
+			)
+			def payment_idempotency_runbook() -> str:
+				"""Explain the payment service's idempotency and retry behavior."""
+				return """
+			# Payment idempotency
+
+			- Retrying a request must preserve its idempotency key and payload.
+			- Reusing the key with a changed payload produces PAYMENT_4027.
+			- Check the original request and retry payload before diagnosing.
+			"""
+
+		More practical example
+
+			def payment_idempotency_runbook() -> str:
+    			return document_store.read("payments/idempotency.md")
+
+		The URI is an identifier understood by this MCP server. It need not be a public URL or a filesystem path. When a client reads it:
+
+			# Assume client is already connected.
+			resource = await client.read_resource(
+				"runbook://payments/idempotency"
+			)
+
+		Full workflow:
+
+			Host application
+				↓ resources/read(uri)
+			MCP server executes the registered resource function
+				↓
+			Returns runbook content and metadata
+				↓
+			Host decides whether to include it in the model's context
+
+		Exposing multiple resources with templating:
+
+			@mcp.resource(
+				"runbook://{service}/{topic}",
+				mime_type="text/markdown",
+			)
+			def read_runbook(service: str, topic: str) -> str:
+				return document_store.read_runbook(service, topic)
+
+			Usage:
+
+			await client.read_resource("runbook://payments/idempotency")
+
+	Examples of Prompts in MCP
+
+		@mcp.prompt()
+		def investigate_payment_failure(error_code: str, service: str) -> str:
+			"""Create an evidence-based payment investigation prompt."""
+			return f"""
+		Investigate error {error_code} in service {service}.
+
+		1. Establish the error's meaning from the applicable runbook.
+		2. Compare affected requests with the documented requirements.
+		3. Inspect relevant configuration and deployment changes.
+		4. Separate confirmed facts from hypotheses.
+
+		Return:
+		- Likely cause
+		- Supporting evidence and references
+		- Missing information
+		- Recommended next diagnostic step
+
+		Do not invent evidence or modify production configuration.
+		"""
+
+		The function builds a prompt, rather than performing the investigation. A host might expose it as a menu entry or slash command:
+
+		/investigate_payment_failure
+			error_code: PAYMENT_4027
+			service: payments
+
+		Usage of above prompt:
+
+			prompt = await client.get_prompt(
+				"investigate_payment_failure",
+				arguments={
+					"error_code": "PAYMENT_4027",
+					"service": "payments",
+				},
+			)
+
+	End-to-End example of using resources and prompts in MCP
+
+		runbook = await client.read_resource(
+			"runbook://payments/idempotency"
+		)
+
+		investigation = await client.get_prompt(
+			"investigate_payment_failure",
+			arguments={"error_code": "PAYMENT_4027", "service": "payments"},
+		)
+
+		messages = [
+			application_system_message,
+			*convert_prompt_messages(investigation.messages),
+			context_message(extract_resource_text(runbook)),
+			user_message("Failures began immediately after yesterday's rollout."),
+		]
+
+		answer = await model.invoke(messages)
+		
+	Performance optimization solutions for various MCP concerns
+
+		| Concern 								| Practical technique 												  |
+		|---------------------------------------|---------------------------------------------------------------------|
+		| Too many tool definitions 			| Select relevant tools instead of supplying an entire catalog 		  |
+		| Huge tool outputs 					| Summaries, pagination, projections, resource references  		  	  |
+		| Repeated discovery 					| Cache according to supported TTL/scope and invalidate appropriately |
+		| Slow downstream I/O 					| Async calls, pooled connections, bounded parallelism 				  |
+		| Expensive searches 					| Indexed filters, result limits, query budgets 					  |
+		| Rate-limited APIs 					| Backpressure, quotas, bounded retries with jitter 				  |
+		| Repeated writes after timeouts 		| Idempotency keys and durable operation records 					  |
+		| Long operations 						| Durable handles, status retrieval, cancellation where supported 	  |
+		| Difficult debugging 					| Spans around MCP calls and downstream operations 					  |
+		| Contract drift 						| Versioned schemas and compatibility tests 						  |
+
+	Design choices
+
+		- Expose purposeful tools. search_incidents is easier to constrain than execute_arbitrary_sql.
+		- Separate credentials. A token for your MCP server is not automatically valid for its downstream CRM or database. Audience validation and avoiding token passthrough are important protocol requirements.
+		- Treat outputs as data. A retrieved document can contain misleading instructions; being returned by a tool does not grant it authority.
+		- Handle ambiguous outcomes. A timeout after a write may mean the write succeeded. Blind retries can duplicate effects.
+		- Keep stdio clean. Write diagnostic logs to stderr; stdout carries protocol messages.
